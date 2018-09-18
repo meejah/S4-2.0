@@ -1,9 +1,14 @@
 # Describe the software to run on the infrastructure described by s4-ec2.nix.
 {
   network.description = "Zcash server";
+
   zcashnode =
-  { config, pkgs, ... }:
+  { config, pkgs, resources, ... }:
   let zcash = pkgs.callPackage ./zcash/default.nix { };
+      s4signupwebsite = pkgs.callPackage ./s4signupwebsite.nix { };
+      torControlPort = 9051;
+      websiteOnionDir = "/var/lib/tor/onion/signup-website";
+      torKeyFile = "/run/keys/signup-website-tor-onion-service.secret";
   in
   # Allow the two Zcash protocol ports.
   { networking.firewall.allowedTCPPorts = [ 18232 18233 ];
@@ -68,10 +73,85 @@
       };
     };
 
+    /*
+     * Run a Tor node so we can operate a hidden service to allow user signup.
+     */
     services.tor.enable = true;
     /*
      * We don't make outgoing Tor connections via the SOCKS proxy.
      */
     services.tor.client.socksPolicy = "reject *";
+
+    /*
+     * Enable the control port so that we can do interesting things with the
+     * daemon from other programs.
+     */
+    services.tor.controlPort = torControlPort;
+
+#     /*
+#      * Serve up some static content from a web server at an Onion address.
+#      * Nixops has some support for configuring Onion services but not v3
+#      * services.  Thus, we do this configuration manually with this config
+#      * file blob.
+#      */
+#     services.tor.extraConfig = ''
+# HiddenServiceDir /var/lib/tor/onion/signup-website
+# HiddenServiceVersion 3
+# HiddenServicePort 80 127.0.0.1:${toString internalSignupHTTPPort}
+# '';
+
+    /* Provide a private key for the website Onion service. */
+    /* https://elvishjerricco.github.io/2018/06/24/secure-declarative-key-management.html */
+    /* https://nixos.org/nixops/manual/#idm140737318276736 */
+    deployment.keys."signup-website-tor-onion-service.secret" =
+    { keyFile = ./secrets/onion-services/signup-website.secret;
+      user = "tor";
+      group = "tor";
+      permissions = "0600";
+    };
+    deployment.keys."signup-website-tor-onion-service.public" =
+    { keyFile = ./secrets/onion-services/signup-website.public;
+      user = "tor";
+      group = "tor";
+      permissions = "0600";
+    };
+    deployment.keys."signup-website-tor-onion-service.hostname" =
+    { keyFile = ./secrets/onion-services/hostname;
+      user = "tor";
+      group = "tor";
+      permissions = "0600";
+    };
+
+    # https://nixos.org/nixos/manual/options.html#opt-systemd.tmpfiles.rules
+    systemd.tmpfiles.rules =
+    [ "d  ${websiteOnionDir}                       0700 tor tor - -"
+      "L+ ${websiteOnionDir}/hs_ed25519_secret_key -    -   -   - ${torKeyFile}"
+      "L+ ${websiteOnionDir}/hs_ed25519_public_key -    -   -   - /run/keys/signup-website-tor-onion-service.public"
+      "L+ ${websiteOnionDir}/hostname              -    -   -   - /run/keys/signup-website-tor-onion-service.hostname"
+    ];
+
+    /*
+     * Operate a static website allowing user signup, exposed via the Tor
+     * hidden service.
+     */
+    systemd.services."signup-website" =
+    { unitConfig.Documentation = "https://leastauthority.com/";
+      description = "The S4 2.0 signup website.";
+
+      path = [ (pkgs.python27.withPackages (ps: [ ps.twisted ps.txtorcon ])) ];
+
+      # Get it to start as a part of the normal boot process.
+      wantedBy    = [ "multi-user.target" ];
+
+      # Make sure Tor is up and our keys are available.
+      after = [ "tor.service" "signup-website-tor-onion-service.secret-key.service" ];
+      wants = [ "tor.service" "signup-website-tor-onion-service.secret-key.service" ];
+
+      script = ''
+      twist --log-format=text web \
+        --path ${s4signupwebsite} \
+        --port onion:version=3:public_port=80:controlPort=${toString torControlPort}:hiddenServiceDir=${websiteOnionDir}
+      '';
+  };
   };
 }
