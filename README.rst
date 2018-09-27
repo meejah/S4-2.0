@@ -13,13 +13,19 @@ Creating a deployment running entirely within local VirtualBox VMs is an easy wa
 At least, it is in principle.
 In practice, the interaction between NixOps and VirtualBox seems fragile.
 There is a good chance this won't actually work for you.
-It doesn't work for me.
 Bearing that in mind ...
 
 With a working directory of the root of a checkout of S4-2.0::
 
    nixops create --deployment your-s4-petname ops/s4.nix ops/s4-vbox.nix
+   nixops set-args --arg bridgeAdapter '"<host network interface>"'
    nixops deploy --deployment your-s4-petname
+
+For ``<host network interface>``,
+select a network interface on the host which can route traffic out of your network
+and which has a DHCP server.
+This might be something like ``wlp4s0`` or ``enp0s31f6``.
+Make sure to include all of the quotes as indicated above.
 
 AWS Deployment
 --------------
@@ -62,3 +68,27 @@ Zcash
 A non-mining Zcash full node is included as part of this deployment.
 This allows for processing of Zcash shielded transactions.
 The Zcash deployment is primarily configured using ``zcashnode`` in ``s4.nix``.
+
+Tor
+---
+
+A Tor daemon is included as part of this deployment.
+This allows the service website and Tahoe-LAFS daemons to operate as Onion services.
+This, in turn, provides location privacy for users browsing the website and operating Tahoe-LAFS clients.
+The Tor node is primary configured using ``zcashnode`` in ``s4.nix``
+(but maybe this should change).
+
+Tor Service Keys
+````````````````
+
+To publish the website at a stable Onion service address,
+the deployment requires use of persistent private keys.
+No such keys have yet been provisioned.
+Meanwhile, you can generate some throw-away keys::
+
+  pip install stem
+  mkdir -p ops/secrets/onion-services/v3
+  cd ops/secrets/onion-services/v3
+  ../../../../bin/generate-onion-keys
+
+You must have keys before you can use ``nixops`` to deploy the service.
